@@ -1,40 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import {
-  Megaphone,
-  Users,
-  AlertTriangle,
-  Loader2,
-  Send,
-  Search,
-  Paperclip,
-  X,
-  RefreshCw,
-} from 'lucide-react'
-import { toast } from 'sonner'
-import {
-  uploadAccountMedia,
-  deleteAccountMedia,
-  MEDIA_MAX_BYTES_BY_KIND,
-} from '@/lib/storage/upload-media'
-
-const CHAT_MEDIA_BUCKET = 'chat-media'
-type MediaKind = 'image' | 'video' | 'audio' | 'document'
-
-function detectKind(type: string): MediaKind {
-  if (type.startsWith('image/')) return 'image'
-  if (type.startsWith('video/')) return 'video'
-  if (type.startsWith('audio/')) return 'audio'
-  return 'document'
-}
-
-interface GroupRow {
-  id: string
-  group_name: string | null
-  group_jid: string | null
-}
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Megaphone, Plus, Loader2, List, CalendarDays } from 'lucide-react'
+import { format } from 'date-fns'
+import { CreateCampaignDialog, type CampaignPrefill } from '@/components/blasts/create-campaign-dialog'
+import { BlastCalendar } from '@/components/blasts/blast-calendar'
+import { BlastDetailSheet } from '@/components/blasts/blast-detail-sheet'
 
 interface BlastRow {
   id: string
@@ -53,27 +26,22 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   draft: { label: 'Rascunho', cls: 'bg-muted text-muted-foreground' },
   scheduled: { label: 'Agendada', cls: 'bg-amber-500/15 text-amber-500' },
   sending: { label: 'Enviando', cls: 'bg-primary/15 text-primary' },
+  paused: { label: 'Pausada', cls: 'bg-amber-500/15 text-amber-500' },
   sent: { label: 'Concluída', cls: 'bg-green-500/15 text-green-500' },
   failed: { label: 'Falhou', cls: 'bg-red-500/15 text-red-500' },
   canceled: { label: 'Cancelada', cls: 'bg-muted text-muted-foreground' },
 }
 
 export default function BlastsPage() {
-  const [groups, setGroups] = useState<GroupRow[]>([])
   const [blasts, setBlasts] = useState<BlastRow[]>([])
   const [loading, setLoading] = useState(true)
 
-  // form
-  const [message, setMessage] = useState('')
-  const [mentionAll, setMentionAll] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [search, setSearch] = useState('')
-  const [mode, setMode] = useState<'now' | 'schedule'>('now')
-  const [scheduledAt, setScheduledAt] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [media, setMedia] = useState<{ url: string; kind: MediaKind; path: string; name: string } | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const [syncing, setSyncing] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [prefillDate, setPrefillDate] = useState<string | undefined>(undefined)
+  const [prefill, setPrefill] = useState<CampaignPrefill | undefined>(undefined)
+
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
 
   const loadBlasts = useCallback(async () => {
     try {
@@ -85,307 +53,121 @@ export default function BlastsPage() {
     }
   }, [])
 
-  const loadGroups = useCallback(async () => {
-    const supabase = createClient()
-    const { data } = await supabase
-      .from('conversations')
-      .select('id, group_name, group_jid')
-      .eq('is_group', true)
-      .order('group_name', { ascending: true })
-    setGroups((data as GroupRow[]) ?? [])
-  }, [])
-
-  // Pull every group the number is in from Evolution and persist the new
-  // ones — a group otherwise only appears after it sends a message.
-  const syncGroups = useCallback(async () => {
-    setSyncing(true)
-    try {
-      const res = await fetch('/api/whatsapp/groups/sync', { method: 'POST' })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Falha ao sincronizar')
-      await loadGroups()
-      if (data.synced > 0) toast.success(`${data.synced} grupo(s) sincronizado(s).`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao sincronizar grupos')
-    } finally {
-      setSyncing(false)
-    }
-  }, [loadGroups])
-
   useEffect(() => {
-    ;(async () => {
-      await loadGroups()
-      await loadBlasts()
-      setLoading(false)
-      void syncGroups() // background catch-up on newly created groups
-    })()
-  }, [loadGroups, loadBlasts, syncGroups])
-
-  const filteredGroups = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return groups
-    return groups.filter((g) => (g.group_name ?? '').toLowerCase().includes(q))
-  }, [groups, search])
-
-  const toggle = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-
-  const selectAll = () => setSelected(new Set(filteredGroups.map((g) => g.id)))
-  const clearAll = () => setSelected(new Set())
-
-  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    const kind = detectKind(file.type)
-    const max = MEDIA_MAX_BYTES_BY_KIND[kind]
-    if (file.size > max) {
-      return toast.error(`Arquivo muito grande (máx ${Math.round(max / 1024 / 1024)}MB).`)
+    loadBlasts().finally(() => setLoading(false))
+    // Keep the list fresh while campaigns run.
+    const supabase = createClient()
+    const channel = supabase
+      .channel('blasts-list')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_blasts' }, () => void loadBlasts())
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
     }
-    setUploading(true)
-    try {
-      const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file)
-      setMedia({ url: publicUrl, kind, path, name: file.name })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha no upload')
-    } finally {
-      setUploading(false)
-    }
+  }, [loadBlasts])
+
+  const openCreate = (date?: string, pre?: CampaignPrefill) => {
+    setPrefillDate(date)
+    setPrefill(pre)
+    setDialogOpen(true)
   }
 
-  const removeMedia = () => {
-    if (media) void deleteAccountMedia(CHAT_MEDIA_BUCKET, media.path).catch(() => {})
-    setMedia(null)
-  }
-
-  const submit = async () => {
-    if (selected.size === 0) return toast.error('Selecione ao menos um grupo.')
-    if (!message.trim() && !media) return toast.error('Escreva a mensagem ou anexe uma mídia.')
-    if (mode === 'schedule' && !scheduledAt) return toast.error('Defina a data/hora.')
-    setCreating(true)
-    try {
-      const res = await fetch('/api/blasts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message_text: message,
-          media_url: media?.url,
-          media_kind: media?.kind,
-          mention_all: mentionAll,
-          conversation_ids: Array.from(selected),
-          send_now: mode === 'now',
-          scheduled_at: mode === 'schedule' ? new Date(scheduledAt).toISOString() : undefined,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Falha ao criar campanha')
-      toast.success(mode === 'now' ? 'Disparo iniciado!' : 'Campanha agendada!')
-      setMessage('')
-      setMentionAll(false)
-      clearAll()
-      setScheduledAt('')
-      setMedia(null)
-      await loadBlasts()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Erro')
-    } finally {
-      setCreating(false)
-    }
+  const openDetail = (id: string) => {
+    setDetailId(id)
+    setDetailOpen(true)
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 py-2">
-      <div className="flex items-center gap-2">
-        <Megaphone className="h-6 w-6 text-primary" />
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Disparos em grupos</h1>
-          <p className="text-sm text-muted-foreground">
-            Envie uma oferta para vários grupos de uma vez, com delays anti-ban.
-          </p>
+    <div className="mx-auto max-w-4xl space-y-5 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Megaphone className="h-6 w-6 text-primary" />
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Disparos em grupos</h1>
+            <p className="text-sm text-muted-foreground">Campanhas para vários grupos, com agenda e anti-ban.</p>
+          </div>
         </div>
+        <button
+          onClick={() => openCreate()}
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
+        >
+          <Plus className="h-4 w-4" /> Criar campanha
+        </button>
       </div>
 
-      {/* Nova campanha */}
-      <div className="space-y-4 rounded-xl border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold text-foreground">Nova campanha</h2>
+      <Tabs defaultValue="list">
+        <TabsList>
+          <TabsTrigger value="list">
+            <List className="mr-1.5 h-4 w-4" /> Lista
+          </TabsTrigger>
+          <TabsTrigger value="calendar">
+            <CalendarDays className="mr-1.5 h-4 w-4" /> Calendário
+          </TabsTrigger>
+        </TabsList>
 
-        <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          rows={4}
-          placeholder="Escreva a oferta… (você poderá gerar com IA na aba Ofertas)"
-          className="w-full resize-y rounded-lg border border-border bg-muted p-3 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50 focus:outline-none"
-        />
-
-        {/* Mídia (imagem / vídeo / documento) — opcional. O texto vira legenda. */}
-        {media ? (
-          <div className="flex items-center gap-3 rounded-lg border border-border bg-background p-2">
-            {media.kind === 'image' ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={media.url} alt="" className="h-12 w-12 rounded object-cover" />
-            ) : media.kind === 'video' ? (
-              <video src={media.url} className="h-12 w-12 rounded object-cover" />
-            ) : (
-              <div className="flex h-12 w-12 items-center justify-center rounded bg-muted">
-                <Paperclip className="h-5 w-5 text-muted-foreground" />
-              </div>
-            )}
-            <span className="min-w-0 flex-1 truncate text-sm text-foreground">{media.name}</span>
-            <button
-              onClick={removeMedia}
-              aria-label="Remover mídia"
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <label className="inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-foreground hover:bg-muted">
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-            {uploading ? 'Enviando…' : 'Anexar imagem/vídeo'}
-            <input
-              type="file"
-              accept="image/*,video/*,application/pdf"
-              className="hidden"
-              onChange={onPickFile}
-              disabled={uploading}
-            />
-          </label>
-        )}
-
-        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-background p-3">
-          <input
-            type="checkbox"
-            checked={mentionAll}
-            onChange={(e) => setMentionAll(e.target.checked)}
-            className="mt-0.5"
-          />
-          <span className="text-sm">
-            <span className="font-medium text-foreground">Mencionar todos (@todos)</span>
-            <span className="mt-0.5 flex items-center gap-1 text-xs text-amber-500">
-              <AlertTriangle className="h-3 w-3" /> Alto impacto, mas aumenta o risco de ban. Use com moderação.
-            </span>
-          </span>
-        </label>
-
-        {/* Grupos */}
-        <div className="rounded-lg border border-border">
-          <div className="flex items-center justify-between gap-2 border-b border-border p-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar grupo…"
-                className="w-full rounded-md bg-muted py-1.5 pl-8 pr-2 text-sm text-foreground placeholder-muted-foreground focus:outline-none"
-              />
+        {/* Lista */}
+        <TabsContent value="list" className="mt-4 space-y-2">
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-            <button
-              onClick={() => void syncGroups()}
-              disabled={syncing}
-              title="Sincronizar grupos do WhatsApp"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-60"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /> Sincronizar
-            </button>
-            <button onClick={selectAll} className="text-xs text-primary hover:underline">
-              Todos
-            </button>
-            <button onClick={clearAll} className="text-xs text-muted-foreground hover:underline">
-              Limpar
-            </button>
-          </div>
-          <div className="max-h-56 overflow-y-auto p-1">
-            {loading ? (
-              <div className="flex justify-center py-6">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              </div>
-            ) : filteredGroups.length === 0 ? (
-              <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-                Nenhum grupo. Clique em <span className="font-medium">Sincronizar</span> para puxar
-                os grupos do número conectado.
-              </p>
-            ) : (
-              filteredGroups.map((g) => (
-                <label
-                  key={g.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60"
+          ) : blasts.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-10 text-center">
+              <p className="text-sm text-muted-foreground">Nenhuma campanha ainda.</p>
+              <button onClick={() => openCreate()} className="mt-3 text-sm font-medium text-primary hover:underline">
+                Criar a primeira
+              </button>
+            </div>
+          ) : (
+            blasts.map((b) => {
+              const s = STATUS_LABEL[b.status] ?? STATUS_LABEL.draft
+              return (
+                <button
+                  key={b.id}
+                  onClick={() => openDetail(b.id)}
+                  className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:border-primary/40"
                 >
-                  <input type="checkbox" checked={selected.has(g.id)} onChange={() => toggle(g.id)} />
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                  <span className="truncate text-foreground">{g.group_name || 'Grupo'}</span>
-                </label>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Agendamento */}
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-1.5 text-sm text-foreground">
-            <input type="radio" checked={mode === 'now'} onChange={() => setMode('now')} /> Enviar agora
-          </label>
-          <label className="flex items-center gap-1.5 text-sm text-foreground">
-            <input type="radio" checked={mode === 'schedule'} onChange={() => setMode('schedule')} /> Agendar
-          </label>
-          {mode === 'schedule' && (
-            <input
-              type="datetime-local"
-              value={scheduledAt}
-              onChange={(e) => setScheduledAt(e.target.value)}
-              className="rounded-md border border-border bg-muted px-2 py-1 text-sm text-foreground"
-            />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-foreground">{b.message_text || b.name || '(sem texto)'}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {b.sent_count}/{b.total_count} enviados
+                      {b.failed_count > 0 && ` · ${b.failed_count} falhas`}
+                      {b.mention_all && ' · @todos'}
+                      {b.scheduled_at && b.status === 'scheduled' && ` · ${format(new Date(b.scheduled_at), "dd/MM HH:mm")}`}
+                    </p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${s.cls}`}>{s.label}</span>
+                </button>
+              )
+            })
           )}
-        </div>
+        </TabsContent>
 
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">{selected.size} grupo(s) selecionado(s)</span>
-          <button
-            onClick={submit}
-            disabled={creating}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
-          >
-            {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            {mode === 'now' ? 'Disparar' : 'Agendar'}
-          </button>
-        </div>
-      </div>
+        {/* Calendário */}
+        <TabsContent value="calendar" className="mt-4">
+          <BlastCalendar
+            blasts={blasts}
+            onDayClick={(dt) => openCreate(dt)}
+            onBlastClick={(id) => openDetail(id)}
+          />
+        </TabsContent>
+      </Tabs>
 
-      {/* Lista de campanhas */}
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold text-foreground">Campanhas</h2>
-        {blasts.length === 0 ? (
-          <p className="rounded-lg border border-border bg-card p-6 text-center text-sm text-muted-foreground">
-            Nenhuma campanha ainda.
-          </p>
-        ) : (
-          blasts.map((b) => {
-            const s = STATUS_LABEL[b.status] ?? STATUS_LABEL.draft
-            return (
-              <div key={b.id} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm text-foreground">
-                    {b.message_text || b.name || '(sem texto)'}
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {b.sent_count}/{b.total_count} enviados
-                    {b.failed_count > 0 && ` · ${b.failed_count} falhas`}
-                    {b.mention_all && ' · @todos'}
-                  </p>
-                </div>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${s.cls}`}>
-                  {s.label}
-                </span>
-              </div>
-            )
-          })
-        )}
-      </div>
+      <CreateCampaignDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        onCreated={loadBlasts}
+        prefillDate={prefillDate}
+        prefill={prefill}
+      />
+
+      <BlastDetailSheet
+        blastId={detailId}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        onChanged={loadBlasts}
+        onDuplicate={(pre) => openCreate(undefined, pre)}
+      />
     </div>
   )
 }

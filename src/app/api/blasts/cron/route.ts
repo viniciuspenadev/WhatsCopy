@@ -1,5 +1,5 @@
 import { NextResponse, after } from 'next/server'
-import { runDueBlasts } from '@/lib/blasts/runner'
+import { tickBlasts } from '@/lib/blasts/runner'
 
 /**
  * GET /api/blasts/cron — drain scheduled group blasts whose time is due.
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
 
   after(async () => {
     try {
-      await runDueBlasts()
+      await tickBlasts()
     } catch (err) {
       console.error('[blasts/cron] failed:', err)
     }

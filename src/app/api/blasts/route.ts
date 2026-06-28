@@ -1,6 +1,6 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { processBlast } from '@/lib/blasts/runner'
+import { tickBlasts } from '@/lib/blasts/runner'
 
 const MEDIA_KINDS = ['image', 'video', 'document', 'audio']
 
@@ -71,8 +71,9 @@ export async function POST(request: Request) {
   const instanceId = groupRows.find((g) => g.instance_id)?.instance_id ?? null
 
   const sendNow = send_now === true
+  // Send-now is just a schedule for "right now" — the queue worker promotes it.
   const scheduledAt = sendNow ? new Date().toISOString() : scheduled_at ?? null
-  const status = sendNow ? 'sending' : scheduledAt ? 'scheduled' : 'draft'
+  const status = scheduledAt ? 'scheduled' : 'draft'
 
   const { data: blast, error: insErr } = await supabase
     .from('group_blasts')
@@ -107,9 +108,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Campanha criada, mas falha nos alvos: ${tErr.message}` }, { status: 500 })
   }
 
-  // Fire immediately in the background when "send now".
+  // Kick an immediate worker tick so "send now" starts without waiting for cron.
   if (sendNow) {
-    after(() => processBlast(blast.id))
+    after(() => tickBlasts())
   }
 
   return NextResponse.json({ id: blast.id, status, total: groupRows.length })
