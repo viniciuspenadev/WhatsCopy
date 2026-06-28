@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LogOut,
   MessageSquare,
+  QrCode,
   Radio,
   Settings,
   Shield,
@@ -89,6 +90,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
+  { href: "/connect", label: "Connect WhatsApp", icon: QrCode },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/pipelines", label: "Pipelines", icon: GitBranch },
   { href: "/broadcasts", label: "Broadcasts", icon: Radio },
