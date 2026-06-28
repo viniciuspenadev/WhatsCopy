@@ -146,6 +146,14 @@ export interface GroupMetadata {
   participants?: GroupParticipant[]
 }
 
+/** Lightweight group entry for the blast picker (all groups the number is in). */
+export interface GroupSummary {
+  jid: string
+  subject?: string
+  size?: number
+  pictureUrl?: string
+}
+
 export interface ChannelProvider {
   readonly name: ChannelProviderName
 
@@ -170,4 +178,6 @@ export interface ChannelProvider {
   logout(): Promise<void>
   /** Group subject / picture / participants for a `...@g.us` JID. */
   fetchGroupMetadata(groupJid: string): Promise<GroupMetadata | null>
+  /** Every group the connected number belongs to (for the blast picker). */
+  fetchAllGroups(): Promise<GroupSummary[]>
 }

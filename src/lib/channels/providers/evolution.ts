@@ -26,6 +26,7 @@ import {
   type InstanceStatus,
   type QrResult,
   type GroupMetadata,
+  type GroupSummary,
 } from '../provider'
 import type { MessageTemplate } from '@/types'
 
@@ -275,6 +276,23 @@ export class EvolutionProvider implements ChannelProvider {
       // Group metadata is best-effort — a failure shouldn't drop the message.
       return null
     }
+  }
+
+  async fetchAllGroups(): Promise<GroupSummary[]> {
+    const data = await this.req<unknown>(
+      'GET',
+      `/group/fetchAllGroups/${this.instance}?getParticipants=false`,
+    )
+    const arr = Array.isArray(data) ? data : ((data as { groups?: unknown[] })?.groups ?? [])
+    return (arr as Array<Record<string, unknown>>)
+      .map((g) => ({
+        jid: String(g.id ?? g.jid ?? ''),
+        subject: (g.subject ?? g.name) as string | undefined,
+        size: (g.size ??
+          (Array.isArray(g.participants) ? g.participants.length : undefined)) as number | undefined,
+        pictureUrl: (g.pictureUrl ?? g.profilePicUrl) as string | undefined,
+      }))
+      .filter((g) => g.jid)
   }
 
   /** Download inbound media (Evolution returns base64, not a URL). Used by

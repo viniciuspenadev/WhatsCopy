@@ -32,6 +32,7 @@ import {
   type ConnectionState,
   type QrResult,
   type GroupMetadata,
+  type GroupSummary,
   UnsupportedChannelOperation,
 } from '../provider'
 
@@ -103,5 +104,8 @@ export class MetaProvider implements ChannelProvider {
   }
   fetchGroupMetadata(): Promise<GroupMetadata | null> {
     throw new UnsupportedChannelOperation('meta', 'fetchGroupMetadata')
+  }
+  fetchAllGroups(): Promise<GroupSummary[]> {
+    throw new UnsupportedChannelOperation('meta', 'fetchAllGroups')
   }
 }

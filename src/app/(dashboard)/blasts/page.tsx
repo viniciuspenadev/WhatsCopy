@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Megaphone, Users, AlertTriangle, Loader2, Send, Search, Paperclip, X } from 'lucide-react'
+import {
+  Megaphone,
+  Users,
+  AlertTriangle,
+  Loader2,
+  Send,
+  Search,
+  Paperclip,
+  X,
+  RefreshCw,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
   uploadAccountMedia,
@@ -63,6 +73,7 @@ export default function BlastsPage() {
   const [creating, setCreating] = useState(false)
   const [media, setMedia] = useState<{ url: string; kind: MediaKind; path: string; name: string } | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   const loadBlasts = useCallback(async () => {
     try {
@@ -74,19 +85,41 @@ export default function BlastsPage() {
     }
   }, [])
 
-  useEffect(() => {
+  const loadGroups = useCallback(async () => {
     const supabase = createClient()
+    const { data } = await supabase
+      .from('conversations')
+      .select('id, group_name, group_jid')
+      .eq('is_group', true)
+      .order('group_name', { ascending: true })
+    setGroups((data as GroupRow[]) ?? [])
+  }, [])
+
+  // Pull every group the number is in from Evolution and persist the new
+  // ones — a group otherwise only appears after it sends a message.
+  const syncGroups = useCallback(async () => {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/whatsapp/groups/sync', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Falha ao sincronizar')
+      await loadGroups()
+      if (data.synced > 0) toast.success(`${data.synced} grupo(s) sincronizado(s).`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao sincronizar grupos')
+    } finally {
+      setSyncing(false)
+    }
+  }, [loadGroups])
+
+  useEffect(() => {
     ;(async () => {
-      const { data } = await supabase
-        .from('conversations')
-        .select('id, group_name, group_jid')
-        .eq('is_group', true)
-        .order('last_message_at', { ascending: false })
-      setGroups((data as GroupRow[]) ?? [])
+      await loadGroups()
       await loadBlasts()
       setLoading(false)
+      void syncGroups() // background catch-up on newly created groups
     })()
-  }, [loadBlasts])
+  }, [loadGroups, loadBlasts, syncGroups])
 
   const filteredGroups = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -252,6 +285,14 @@ export default function BlastsPage() {
                 className="w-full rounded-md bg-muted py-1.5 pl-8 pr-2 text-sm text-foreground placeholder-muted-foreground focus:outline-none"
               />
             </div>
+            <button
+              onClick={() => void syncGroups()}
+              disabled={syncing}
+              title="Sincronizar grupos do WhatsApp"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} /> Sincronizar
+            </button>
             <button onClick={selectAll} className="text-xs text-primary hover:underline">
               Todos
             </button>
@@ -266,7 +307,8 @@ export default function BlastsPage() {
               </div>
             ) : filteredGroups.length === 0 ? (
               <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-                Nenhum grupo encontrado. Conecte o WhatsApp e receba mensagens dos grupos primeiro.
+                Nenhum grupo. Clique em <span className="font-medium">Sincronizar</span> para puxar
+                os grupos do número conectado.
               </p>
             ) : (
               filteredGroups.map((g) => (
