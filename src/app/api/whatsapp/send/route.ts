@@ -148,21 +148,36 @@ export async function POST(request: Request) {
       )
     }
 
+    // Resolve the send target(s). A group has no contact — it sends to its
+    // `group_jid`. A 1:1 sends to the contact's phone, trying number
+    // variants (trunk-0 quirks / Meta sandbox allow-list).
+    const isGroup = conversation.is_group === true
     const contact = conversation.contact
-    if (!contact?.phone) {
-      return NextResponse.json(
-        { error: 'Contact phone number not found' },
-        { status: 400 }
-      )
-    }
 
-    // Sanitize and validate phone
-    const sanitizedPhone = sanitizePhoneForMeta(contact.phone)
-    if (!isValidE164(sanitizedPhone)) {
-      return NextResponse.json(
-        { error: 'Invalid phone number format' },
-        { status: 400 }
-      )
+    let sendTargets: string[]
+    if (isGroup) {
+      if (!conversation.group_jid) {
+        return NextResponse.json(
+          { error: 'Group JID not found on this conversation' },
+          { status: 400 }
+        )
+      }
+      sendTargets = [conversation.group_jid as string]
+    } else {
+      if (!contact?.phone) {
+        return NextResponse.json(
+          { error: 'Contact phone number not found' },
+          { status: 400 }
+        )
+      }
+      const sanitizedPhone = sanitizePhoneForMeta(contact.phone)
+      if (!isValidE164(sanitizedPhone)) {
+        return NextResponse.json(
+          { error: 'Invalid phone number format' },
+          { status: 400 }
+        )
+      }
+      sendTargets = phoneVariants(sanitizedPhone)
     }
 
     // Resolve which connection (instance) this thread sends through, then
@@ -244,7 +259,7 @@ export async function POST(request: Request) {
     // format succeeds, we persist it back to the contact row so the
     // next send goes through on the first attempt.
     let waMessageId = ''
-    let workingPhone = sanitizedPhone
+    let workingPhone = sendTargets[0]
 
     // For template sends, load the row so sendTemplateMessage can
     // build header + button components from the template definition.
@@ -315,7 +330,7 @@ export async function POST(request: Request) {
     }
 
     try {
-      const variants = phoneVariants(sanitizedPhone)
+      const variants = sendTargets
       let lastError: unknown = null
 
       for (const variant of variants) {
@@ -347,12 +362,11 @@ export async function POST(request: Request) {
       )
     }
 
-    // If a non-original variant succeeded, update the contact so future
-    // sends go straight through. sanitizePhoneForMeta on workingPhone
-    // will yield workingPhone itself, so re-storing preserves it.
-    if (workingPhone !== sanitizedPhone) {
+    // If a non-original phone variant succeeded (1:1 only), persist it so
+    // future sends go straight through. Groups have no contact row.
+    if (!isGroup && contact && workingPhone !== sendTargets[0]) {
       console.log(
-        `[whatsapp/send] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
+        `[whatsapp/send] Auto-corrected contact phone: ${sendTargets[0]} → ${workingPhone}`
       )
       await supabase
         .from('contacts')
@@ -407,22 +421,23 @@ export async function POST(request: Request) {
     // run later. For accounts with no active runs the UPDATE matches
     // zero rows — cheap and harmless.
     try {
-      const { error: pauseErr } = await supabaseAdmin()
-        .from('flow_runs')
-        .update({
-          status: 'paused_by_agent',
-          ended_at: new Date().toISOString(),
-          end_reason: 'agent_replied',
-        })
-        .eq('account_id', accountId)
-        .eq('contact_id', contact.id)
-        .eq('status', 'active')
-      if (pauseErr) {
-        // Best-effort — log + continue. The agent's message already
-        // landed at Meta; don't fail the response over a bookkeeping
-        // miss. Worst case: a stale active run gets caught by the
-        // stale-run cron sweep within 24h.
-        console.error('[flows] pause-on-agent-send failed:', pauseErr.message)
+      // Groups have no contact-scoped flow runs to pause.
+      if (contact) {
+        const { error: pauseErr } = await supabaseAdmin()
+          .from('flow_runs')
+          .update({
+            status: 'paused_by_agent',
+            ended_at: new Date().toISOString(),
+            end_reason: 'agent_replied',
+          })
+          .eq('account_id', accountId)
+          .eq('contact_id', contact.id)
+          .eq('status', 'active')
+        if (pauseErr) {
+          // Best-effort — log + continue. The agent's message already
+          // landed; don't fail the response over a bookkeeping miss.
+          console.error('[flows] pause-on-agent-send failed:', pauseErr.message)
+        }
       }
     } catch (err) {
       console.error(

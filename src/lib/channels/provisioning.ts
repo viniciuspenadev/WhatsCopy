@@ -40,7 +40,23 @@ export async function ensureEvolutionInstance(
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle()
-  if (existing) return existing as unknown as WhatsappInstanceRow
+  if (existing) {
+    const row = existing as unknown as WhatsappInstanceRow
+    // Self-heal: re-assert the webhook at the CURRENT APP_PUBLIC_URL. The
+    // first provisioning may have run before the public URL was set (e.g.
+    // a localhost default), which silently drops every inbound event.
+    if (row.webhook_secret) {
+      try {
+        await getProvider(row).setWebhook(evolutionWebhookUrl(row.webhook_secret))
+      } catch (err) {
+        console.warn(
+          '[provisioning] webhook re-assert failed:',
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+    return row
+  }
 
   const instanceName = `wc_${accountId.replace(/-/g, '').slice(0, 12)}_${crypto
     .randomBytes(3)

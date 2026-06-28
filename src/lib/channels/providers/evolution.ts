@@ -112,6 +112,13 @@ export class EvolutionProvider implements ChannelProvider {
     if (args.contextMessageId) {
       body.quoted = { key: { id: args.contextMessageId } }
     }
+    // "@todos": mention every participant of the group. Evolution resolves
+    // the member list server-side when mentionsEveryOne is set.
+    if (args.mentionsEveryOne) {
+      body.mentionsEveryOne = true
+    } else if (args.mentioned && args.mentioned.length > 0) {
+      body.mentioned = args.mentioned
+    }
     const data = await this.req('POST', `/message/sendText/${this.instance}`, body)
     return { messageId: this.extractId(data) }
   }
@@ -133,6 +140,11 @@ export class EvolutionProvider implements ChannelProvider {
     if (args.caption) body.caption = args.caption
     if (args.filename) body.fileName = args.filename
     if (args.contextMessageId) body.quoted = { key: { id: args.contextMessageId } }
+    if (args.mentionsEveryOne) {
+      body.mentionsEveryOne = true
+    } else if (args.mentioned && args.mentioned.length > 0) {
+      body.mentioned = args.mentioned
+    }
     const data = await this.req('POST', `/message/sendMedia/${this.instance}`, body)
     return { messageId: this.extractId(data) }
   }

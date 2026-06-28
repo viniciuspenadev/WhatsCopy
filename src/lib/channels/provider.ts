@@ -50,6 +50,15 @@ export interface SendTextArgs {
   text: string
   /** Provider message id being replied to (renders a quote). */
   contextMessageId?: string
+  /**
+   * Group blasts only (Evolution): mention every participant — the
+   * programmatic "@todos". Notifies even muted/archived members. Meta has
+   * no groups, so the Meta provider ignores it.
+   */
+  mentionsEveryOne?: boolean
+  /** Explicit list of JIDs to mention (fallback when mentionsEveryOne is
+   *  unavailable). Built from group_members. */
+  mentioned?: string[]
 }
 
 export interface SendMediaArgs {
@@ -60,6 +69,9 @@ export interface SendMediaArgs {
   caption?: string
   filename?: string
   contextMessageId?: string
+  /** Group blasts (Evolution): mention every participant. */
+  mentionsEveryOne?: boolean
+  mentioned?: string[]
 }
 
 export interface SendTemplateArgs {
