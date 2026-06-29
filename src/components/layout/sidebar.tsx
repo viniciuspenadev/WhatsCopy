@@ -13,6 +13,7 @@ import {
   LogOut,
   Megaphone,
   MessageSquare,
+  Radar,
   Settings,
   Shield,
   Sparkles,
@@ -92,6 +93,7 @@ const navItems: NavItem[] = [
   { href: "/pipelines", label: "Pipelines", icon: GitBranch },
   { href: "/offers", label: "Ofertas", icon: Sparkles },
   { href: "/blasts", label: "Disparos", icon: Megaphone },
+  { href: "/monitoring", label: "Monitoramento", icon: Radar },
 ];
 
 const bottomNavItems = [
@@ -108,6 +110,15 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
+
+  // Prefix the browser tab title with the unread count, app-wide (the sidebar
+  // is always mounted in the dashboard shell). Strips any prior "(n)" so it
+  // doesn't stack across updates.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const base = document.title.replace(/^\(\d+\)\s*/, "");
+    document.title = totalUnread > 0 ? `(${totalUnread}) ${base}` : base;
+  }, [totalUnread]);
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it

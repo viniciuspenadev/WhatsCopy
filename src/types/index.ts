@@ -167,9 +167,22 @@ export interface Conversation {
   group_picture?: string | null;
   group_members?: unknown;
   group_metadata?: unknown;
+  /** Group monitoring (Pack 5). */
+  monitored?: boolean;
+  member_count?: number | null;
+  member_cap?: number | null;
+  /** Triage (Pack 4) / notifications (Pack 3). */
+  pinned?: boolean;
+  muted?: boolean;
 }
 
-export type SenderType = 'customer' | 'agent' | 'bot';
+/** One participant inside a group's `group_members` array (Baileys shape). */
+export interface GroupParticipant {
+  id: string;
+  admin?: string | null;
+}
+
+export type SenderType = 'customer' | 'agent' | 'bot' | 'system';
 export type ContentType =
   | 'text'
   | 'image'
@@ -179,7 +192,9 @@ export type ContentType =
   | 'location'
   | 'template'
   /** Customer tapped a reply button or list row on a message we sent. */
-  | 'interactive';
+  | 'interactive'
+  /** Group monitoring event (join/leave/role/subject) — centered pill. */
+  | 'system';
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface Message {

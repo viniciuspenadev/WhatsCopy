@@ -178,3 +178,72 @@ export function extractQrBase64(data: unknown): string | null {
   const d = data as { qrcode?: { base64?: string }; base64?: string } | undefined
   return d?.qrcode?.base64 ?? d?.base64 ?? null
 }
+
+// ---- Group monitoring (Pack 5) -------------------------------------------
+
+export type GroupEventAction =
+  | 'add'
+  | 'remove'
+  | 'promote'
+  | 'demote'
+  | 'subject'
+  | 'description'
+  | 'picture'
+
+export interface GroupEvent {
+  groupJid: string
+  action: GroupEventAction
+  /** Target participant JIDs (membership/role actions). */
+  participants: string[]
+  /** Who performed the action, when the provider includes it. */
+  author: string | null
+  /** New subject for `action: 'subject'`. */
+  subject?: string | null
+}
+
+/** GROUP_PARTICIPANTS_UPDATE → a membership/role event (add/remove/promote/demote). */
+export function normalizeGroupParticipants(data: unknown): GroupEvent | null {
+  const d = (Array.isArray(data) ? data[0] : data) as
+    | { id?: string; participants?: string[]; action?: string; author?: string }
+    | undefined
+  if (!d?.id || !d.action) return null
+  const action = d.action as GroupEventAction
+  if (!['add', 'remove', 'promote', 'demote'].includes(action)) return null
+  return {
+    groupJid: d.id,
+    action,
+    participants: Array.isArray(d.participants) ? d.participants : [],
+    author: d.author ?? null,
+  }
+}
+
+/** PRESENCE_UPDATE → which chat, and whether someone is composing/recording. */
+export function normalizePresence(
+  data: unknown,
+): { chatJid: string; typing: boolean } | null {
+  const d = (Array.isArray(data) ? data[0] : data) as
+    | { id?: string; presences?: Record<string, { lastKnownPresence?: string }> }
+    | undefined
+  if (!d?.id) return null
+  let typing = false
+  for (const key of Object.keys(d.presences ?? {})) {
+    const p = d.presences?.[key]?.lastKnownPresence
+    if (p === 'composing' || p === 'recording') {
+      typing = true
+      break
+    }
+  }
+  return { chatJid: d.id, typing }
+}
+
+/** GROUPS_UPDATE → a metadata change. We surface subject renames (most useful). */
+export function normalizeGroupUpdate(data: unknown): GroupEvent | null {
+  const d = (Array.isArray(data) ? data[0] : data) as
+    | { id?: string; subject?: string }
+    | undefined
+  if (!d?.id) return null
+  if (typeof d.subject === 'string') {
+    return { groupJid: d.id, action: 'subject', participants: [], author: null, subject: d.subject }
+  }
+  return null
+}

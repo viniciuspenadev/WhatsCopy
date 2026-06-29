@@ -11,6 +11,7 @@ import { ContactSidebar } from "@/components/inbox/contact-sidebar";
 import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ensureNotifPermission, notifyNewMessage } from "@/lib/notifications/notify";
 
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
@@ -97,11 +98,24 @@ export default function InboxPage() {
    * realtime channel). The ref is kept in sync via the effect below.
    */
   const knownConvIdsRef = useRef<Set<string>>(new Set());
+  // Synchronous id → conversation map, so the realtime handler can read a
+  // conversation's name / muted flag for notifications without a state dep.
+  const convByIdRef = useRef<Map<string, Conversation>>(new Map());
   useEffect(() => {
     const next = new Set<string>();
-    for (const c of conversations) next.add(c.id);
+    const map = new Map<string, Conversation>();
+    for (const c of conversations) {
+      next.add(c.id);
+      map.set(c.id, c);
+    }
     knownConvIdsRef.current = next;
+    convByIdRef.current = map;
   }, [conversations]);
+
+  // Ask for browser-notification permission once (best-effort; no-op if denied).
+  useEffect(() => {
+    ensureNotifPermission();
+  }, []);
 
   // Pull the conversation row with its `contact` joined and merge it
   // into state. Needed because Supabase Realtime payloads only carry the
@@ -204,6 +218,22 @@ export default function InboxPage() {
       const newMsg = event.new;
 
       if (event.eventType === "INSERT") {
+        // Notify on inbound messages the user isn't actively looking at, and
+        // that aren't muted. System events (group joins/leaves) never notify.
+        if (newMsg.content_type !== "system" && newMsg.sender_type === "customer") {
+          const conv = convByIdRef.current.get(newMsg.conversation_id);
+          const activeVisible =
+            activeConversation?.id === newMsg.conversation_id &&
+            typeof document !== "undefined" &&
+            document.visibilityState === "visible";
+          if (!activeVisible && !conv?.muted) {
+            const name = conv?.is_group
+              ? conv.group_name || "Grupo"
+              : conv?.contact?.name || conv?.contact?.phone || "Nova mensagem";
+            notifyNewMessage(name, newMsg.content_text || "[mídia]");
+          }
+        }
+
         // Add to messages if it belongs to active conversation
         if (
           activeConversation &&
@@ -225,7 +255,12 @@ export default function InboxPage() {
         // the preview and triggering a hydrate — see the comment on
         // knownConvIdsRef for why a closure flag inside the updater would
         // always read false here.
-        if (knownConvIdsRef.current.has(newMsg.conversation_id)) {
+        // Group monitoring events (joins/leaves) appear in the open thread but
+        // must NOT bump the list preview or unread badge — they'd spam the
+        // inbox. They still flow into the active-thread messages above.
+        if (newMsg.content_type === "system") {
+          // nothing to do for the list
+        } else if (knownConvIdsRef.current.has(newMsg.conversation_id)) {
           setConversations((prev) =>
             prev.map((c) =>
               c.id === newMsg.conversation_id
@@ -520,6 +555,18 @@ export default function InboxPage() {
     [activeConversation]
   );
 
+  const handleMuteChange = useCallback(
+    (conversationId: string, muted: boolean) => {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, muted } : c)),
+      );
+      if (activeConversation?.id === conversationId) {
+        setActiveConversation((prev) => (prev ? { ...prev, muted } : prev));
+      }
+    },
+    [activeConversation],
+  );
+
   const handleAssignChange = useCallback(
     (conversationId: string, assignedAgentId: string | null) => {
       setConversations((prev) =>
@@ -604,6 +651,7 @@ export default function InboxPage() {
             onUpdateMessage={handleUpdateMessage}
             onStatusChange={handleStatusChange}
             onAssignChange={handleAssignChange}
+            onMuteChange={handleMuteChange}
             onBack={handleCloseConversation}
             resyncToken={resyncToken}
             onRefresh={handleManualRefresh}

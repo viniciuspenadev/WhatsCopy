@@ -1,12 +1,16 @@
 import { NextResponse, after } from 'next/server'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { INSTANCE_COLUMNS, type WhatsappInstanceRow } from '@/lib/channels/factory'
-import { ingestInboundMessage } from '@/lib/channels/ingest'
+import { ingestInboundMessage, ingestGroupEvent } from '@/lib/channels/ingest'
 import {
   normalizeUpsert,
   normalizeStatusUpdates,
+  normalizeGroupParticipants,
+  normalizeGroupUpdate,
+  normalizePresence,
   extractQrBase64,
 } from '@/lib/channels/normalize/evolution'
+import { broadcastPresence } from '@/lib/realtime/broadcast-server'
 import { mapEvolutionState } from '@/lib/channels/providers/evolution'
 
 /**
@@ -90,6 +94,38 @@ async function handleEvent(
           .eq('message_id', u.providerMessageId)
       }
       break
+    }
+
+    case 'GROUP_PARTICIPANTS_UPDATE': {
+      const ev = normalizeGroupParticipants(body.data)
+      if (ev) {
+        try {
+          await ingestGroupEvent(instance, ev)
+        } catch (err) {
+          console.error('[evolution-webhook] group participants failed:', err)
+        }
+      }
+      break
+    }
+
+    case 'GROUP_UPDATE': {
+      const ev = normalizeGroupUpdate(body.data)
+      if (ev) {
+        try {
+          await ingestGroupEvent(instance, ev)
+        } catch (err) {
+          console.error('[evolution-webhook] group update failed:', err)
+        }
+      }
+      break
+    }
+
+    case 'PRESENCE_UPDATE': {
+      // Ephemeral typing/online → broadcast to the inbox, never persisted.
+      // Return early so the high-frequency event doesn't write last_webhook_at.
+      const p = normalizePresence(body.data)
+      if (p) await broadcastPresence(instance.account_id, p)
+      return
     }
 
     case 'CONNECTION_UPDATE': {

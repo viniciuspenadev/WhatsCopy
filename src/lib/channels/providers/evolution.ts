@@ -42,6 +42,11 @@ export const EVOLUTION_WEBHOOK_EVENTS = [
   'MESSAGES_UPDATE',
   'CONNECTION_UPDATE',
   'QRCODE_UPDATED',
+  // Group monitoring (Pack 5): membership + group metadata changes.
+  'GROUP_PARTICIPANTS_UPDATE',
+  'GROUP_UPDATE',
+  // Presence (Pack 2C): "typing…" / online indicators.
+  'PRESENCE_UPDATE',
 ] as const
 
 export class EvolutionProvider implements ChannelProvider {
@@ -293,6 +298,22 @@ export class EvolutionProvider implements ChannelProvider {
         pictureUrl: (g.pictureUrl ?? g.profilePicUrl) as string | undefined,
       }))
       .filter((g) => g.jid)
+  }
+
+  async fetchProfilePictureUrl(jid: string): Promise<string | null> {
+    try {
+      // Evolution v2: POST /chat/fetchProfilePictureUrl/{instance} { number }.
+      // Accepts a bare phone or a full JID; returns { profilePictureUrl }.
+      const data = await this.req<{ profilePictureUrl?: string | null; url?: string | null }>(
+        'POST',
+        `/chat/fetchProfilePictureUrl/${this.instance}`,
+        { number: this.toNumber(jid) },
+      )
+      return data?.profilePictureUrl ?? data?.url ?? null
+    } catch {
+      // Best-effort — no photo / privacy / not-on-WhatsApp must not throw.
+      return null
+    }
   }
 
   /** Download inbound media (Evolution returns base64, not a URL). Used by

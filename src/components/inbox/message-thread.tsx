@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { usePresence } from "@/hooks/use-presence";
@@ -27,6 +27,8 @@ import {
   PanelRightOpen,
   PanelRightClose,
   Users,
+  Bell,
+  BellOff,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +48,7 @@ import {
   type SendMediaPayload,
 } from "./message-composer";
 import { deleteAccountMedia } from "@/lib/storage/upload-media";
+import { useTypingPresence } from "@/hooks/use-typing-presence";
 import { TemplatePicker } from "./template-picker";
 import { buildReplyPreview } from "./reply-quote";
 import { toast } from "sonner";
@@ -75,6 +78,8 @@ interface MessageThreadProps {
     conversationId: string,
     assignedAgentId: string | null,
   ) => void;
+  /** Toggle per-conversation notification mute. */
+  onMuteChange?: (conversationId: string, muted: boolean) => void;
   /**
    * On mobile, the thread is shown full-screen with the conversation list
    * hidden. This callback lets the page deselect the active conversation
@@ -160,13 +165,14 @@ export function MessageThread({
   onUpdateMessage,
   onStatusChange,
   onAssignChange,
+  onMuteChange,
   onBack,
   resyncToken = 0,
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
 }: MessageThreadProps) {
-  const { user } = useAuth();
+  const { user, accountId } = useAuth();
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -196,6 +202,38 @@ export function MessageThread({
     }, 700);
   }, [isRefreshing, onRefresh]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+
+  // --- Smart autoscroll + "new messages" pill -------------------------
+  // Auto-scroll to the newest message ONLY when the user is already near the
+  // bottom (or just sent something). If they've scrolled up to read history,
+  // an incoming message must not yank them down — a pill surfaces instead.
+  const atBottomRef = useRef(true);
+  const [newMsgCount, setNewMsgCount] = useState(0);
+  const prevConvIdRef = useRef<string | undefined>(undefined);
+  const prevLastMsgIdRef = useRef<string | null>(null);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    atBottomRef.current = true;
+    setNewMsgCount(0);
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const near = distanceFromBottom < 120;
+    atBottomRef.current = near;
+    if (near) setNewMsgCount(0);
+  }, []);
+
+  // "Unread" divider: snapshot the unread count the instant a conversation
+  // opens (before the reset effect zeroes it). Declared here; populated by the
+  // effect below `conversationId` (which it depends on).
+  const [unreadAtOpen, setUnreadAtOpen] = useState(0);
+  const prevConvForUnreadRef = useRef<string | undefined>(undefined);
 
   // Profiles are bounded by RLS to rows the current user is allowed to
   // see — today that's just the current user, but the dropdown keeps the
@@ -261,6 +299,24 @@ export function MessageThread({
 
   const conversationId = conversation?.id;
   const hasUnread = (conversation?.unread_count ?? 0) > 0;
+
+  // Capture unread-at-open for the "New messages" divider (see state above).
+  useEffect(() => {
+    if (prevConvForUnreadRef.current !== conversationId) {
+      prevConvForUnreadRef.current = conversationId;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setUnreadAtOpen(conversation?.unread_count ?? 0);
+    }
+  }, [conversationId, conversation?.unread_count]);
+
+  // "Typing…" presence for the open chat (Pack 2C). chatJid is the group JID
+  // for groups, or `<phone>@s.whatsapp.net` for 1:1.
+  const activeChatJid = conversation?.is_group
+    ? conversation.group_jid ?? null
+    : conversation?.contact?.phone
+      ? `${conversation.contact.phone.replace(/\D/g, "")}@s.whatsapp.net`
+      : null;
+  const contactTyping = useTypingPresence(accountId, activeChatJid);
 
   // Fetch messages whenever the selected conversation changes. Kept
   // separate from the unread-reset effect so that incoming messages
@@ -431,13 +487,43 @@ export function MessageThread({
       });
   }, [conversationId, hasUnread]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll, but only when it won't interrupt the user (see refs above).
   useEffect(() => {
-    if (scrollRef.current) {
-      const el = scrollRef.current;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const convChanged = prevConvIdRef.current !== conversationId;
+    prevConvIdRef.current = conversationId;
+
+    const last = messages[messages.length - 1];
+    const lastId = last?.id ?? null;
+    const lastChanged = lastId !== prevLastMsgIdRef.current;
+    prevLastMsgIdRef.current = lastId;
+
+    // Opening a conversation (or first load): jump straight to the bottom.
+    if (convChanged) {
       el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setNewMsgCount(0);
+      return;
     }
-  }, [messages]);
+
+    // Re-render without a genuinely new last message (status tick, reaction
+    // landing) — never move the scroll position.
+    if (!lastChanged) return;
+
+    const ownMessage =
+      last?.sender_type === "agent" || last?.sender_type === "bot";
+    if (atBottomRef.current || ownMessage) {
+      el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+    } else {
+      // User is reading history — surface a pill instead of yanking them down.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setNewMsgCount((n) => n + 1);
+    }
+  }, [messages, conversationId]);
 
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
@@ -659,6 +745,17 @@ export function MessageThread({
     return map;
   }, [messages]);
 
+  // Id of the first unread (customer) message at open-time — the row the
+  // "New messages" divider renders above. Null when the conversation had no
+  // unread messages.
+  const unreadAnchorId = useMemo(() => {
+    if (unreadAtOpen <= 0) return null;
+    const inbound = messages.filter((m) => m.sender_type === "customer");
+    if (inbound.length === 0) return null;
+    const idx = Math.max(0, inbound.length - unreadAtOpen);
+    return inbound[idx]?.id ?? null;
+  }, [messages, unreadAtOpen]);
+
   // Bucket reactions by their target message_id for O(1) per-bubble lookup.
   const reactionsByMessageId = useMemo(() => {
     const map = new Map<string, MessageReaction[]>();
@@ -758,6 +855,22 @@ export function MessageThread({
     [conversation, user?.id],
   );
 
+  const handleToggleMute = useCallback(async () => {
+    if (!conversation || !onMuteChange) return;
+    const next = !conversation.muted;
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("conversations")
+      .update({ muted: next })
+      .eq("id", conversation.id);
+    if (error) {
+      toast.error("Falha ao atualizar notificações");
+      return;
+    }
+    onMuteChange(conversation.id, next);
+    toast.success(next ? "Conversa silenciada" : "Notificações reativadas");
+  }, [conversation, onMuteChange]);
+
   const handleAssignChange = useCallback(
     async (agentId: string | null) => {
       if (!conversation) return;
@@ -806,7 +919,9 @@ export function MessageThread({
     ? conversation.group_name || "Grupo"
     : contact?.name || contact?.phone || "Cliente";
   const headerSubtitle = isGroup ? "Grupo" : contact?.phone ?? "";
-  const groupPicture = isGroup ? conversation.group_picture : null;
+  // Avatar shown in the header: group photo for groups, the contact's
+  // WhatsApp profile photo for 1:1 (synced by ingest / the avatar-sync route).
+  const headerAvatar = isGroup ? conversation.group_picture : contact?.avatar_url;
   const messageGroups = groupMessagesByDate(messages);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
@@ -844,10 +959,10 @@ export function MessageThread({
             </button>
           )}
           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-sm font-medium text-foreground">
-            {groupPicture ? (
+            {headerAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={groupPicture}
+                src={headerAvatar}
                 alt={displayName}
                 className="h-9 w-9 rounded-full object-cover"
               />
@@ -859,7 +974,11 @@ export function MessageThread({
           </div>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
-            <p className="truncate text-xs text-muted-foreground">{headerSubtitle}</p>
+            {contactTyping ? (
+              <p className="truncate text-xs font-medium text-primary">digitando…</p>
+            ) : (
+              <p className="truncate text-xs text-muted-foreground">{headerSubtitle}</p>
+            )}
           </div>
           {/* Session timer badge — hidden on the narrowest phones so
               the name + back arrow keep their room. */}
@@ -922,6 +1041,27 @@ export function MessageThread({
               <RefreshCw
                 className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")}
               />
+            </button>
+          )}
+
+          {/* Mute toggle — silences sound/browser notifications for this
+              conversation (great for noisy blast groups). */}
+          {onMuteChange && (
+            <button
+              type="button"
+              onClick={handleToggleMute}
+              aria-label={conversation.muted ? "Reativar notificações" : "Silenciar"}
+              title={conversation.muted ? "Reativar notificações" : "Silenciar"}
+              className={cn(
+                "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground",
+                conversation.muted ? "text-amber-400" : "text-muted-foreground",
+              )}
+            >
+              {conversation.muted ? (
+                <BellOff className="h-3.5 w-3.5" />
+              ) : (
+                <Bell className="h-3.5 w-3.5" />
+              )}
             </button>
           )}
 
@@ -1017,8 +1157,14 @@ export function MessageThread({
         </div>
       </div>
 
-      {/* Messages Area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+      {/* Messages Area — wrapped in a relative box so the "new messages"
+          pill can float over the scroll viewport. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        onScroll={handleMessagesScroll}
+        className="flex-1 overflow-y-auto px-4 py-4"
+      >
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -1043,6 +1189,18 @@ export function MessageThread({
                 {/* Messages */}
                 <div className="space-y-2">
                   {group.messages.map((msg) => {
+                    // Group monitoring events (joins/leaves/role changes) are
+                    // rendered as a centered pill, WhatsApp-style — no bubble,
+                    // no reply/react affordances.
+                    if (msg.content_type === "system") {
+                      return (
+                        <div key={msg.id} className="my-1 flex justify-center">
+                          <span className="max-w-[80%] rounded-full bg-muted/70 px-3 py-1 text-center text-[11px] text-muted-foreground">
+                            {msg.content_text}
+                          </span>
+                        </div>
+                      );
+                    }
                     const parent = msg.reply_to_message_id
                       ? messagesById.get(msg.reply_to_message_id)
                       : null;
@@ -1065,29 +1223,51 @@ export function MessageThread({
                       void postReaction(msg.id, next);
                     };
                     return (
-                      <MessageActions
-                        key={msg.id}
-                        message={msg}
-                        onReply={() => handleStartReply(msg)}
-                        onReact={(emoji) => {
-                          if (emoji) void postReaction(msg.id, emoji);
-                        }}
-                      >
-                        <MessageBubble
+                      <Fragment key={msg.id}>
+                        {msg.id === unreadAnchorId && (
+                          <div className="my-2 flex items-center justify-center">
+                            <span className="rounded-full bg-primary/15 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                              Mensagens não lidas
+                            </span>
+                          </div>
+                        )}
+                        <MessageActions
                           message={msg}
-                          reply={reply}
-                          reactions={msgReactions}
-                          currentUserId={user?.id}
-                          onToggleReaction={handlePillToggle}
-                          isGroup={isGroup}
-                        />
-                      </MessageActions>
+                          onReply={() => handleStartReply(msg)}
+                          onReact={(emoji) => {
+                            if (emoji) void postReaction(msg.id, emoji);
+                          }}
+                        >
+                          <MessageBubble
+                            message={msg}
+                            reply={reply}
+                            reactions={msgReactions}
+                            currentUserId={user?.id}
+                            onToggleReaction={handlePillToggle}
+                            isGroup={isGroup}
+                          />
+                        </MessageActions>
+                      </Fragment>
                     );
                   })}
                 </div>
               </div>
             ))}
           </div>
+        )}
+      </div>
+
+        {/* "New messages" pill — only while the user has scrolled up and
+            fresh messages arrived below. Click jumps to the bottom. */}
+        {newMsgCount > 0 && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom("smooth")}
+            className="absolute bottom-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-lg transition-transform hover:scale-105"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+            {newMsgCount} nova{newMsgCount === 1 ? "" : "s"} mensage{newMsgCount === 1 ? "m" : "ns"}
+          </button>
         )}
       </div>
 

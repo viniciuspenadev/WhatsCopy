@@ -180,4 +180,11 @@ export interface ChannelProvider {
   fetchGroupMetadata(groupJid: string): Promise<GroupMetadata | null>
   /** Every group the connected number belongs to (for the blast picker). */
   fetchAllGroups(): Promise<GroupSummary[]>
+  /**
+   * Public profile-picture URL for a contact JID / phone (best-effort).
+   * Returns null when the contact has no photo, hides it, or the provider
+   * can't fetch it. The returned URL is the provider's CDN (often expiring)
+   * — callers that need a stable URL should re-host it.
+   */
+  fetchProfilePictureUrl(jid: string): Promise<string | null>
 }

@@ -108,4 +108,10 @@ export class MetaProvider implements ChannelProvider {
   fetchAllGroups(): Promise<GroupSummary[]> {
     throw new UnsupportedChannelOperation('meta', 'fetchAllGroups')
   }
+  // The Cloud API doesn't expose arbitrary contacts' profile photos.
+  // Return null (best-effort contract) rather than throwing so the shared
+  // ingest avatar path can call this uniformly across providers.
+  async fetchProfilePictureUrl(): Promise<string | null> {
+    return null
+  }
 }
