@@ -5,6 +5,7 @@ import {
   INSTANCE_COLUMNS,
   type WhatsappInstanceRow,
 } from '@/lib/channels/factory'
+import { uploadAccountMediaFromUrl } from '@/lib/storage/upload-media-server'
 
 /**
  * POST /api/whatsapp/groups/refresh-members  { conversationId }
@@ -48,9 +49,10 @@ export async function POST(req: Request) {
   }
   const instance = inst as unknown as WhatsappInstanceRow
 
+  const provider = getProvider(instance)
   let meta
   try {
-    meta = await getProvider(instance).fetchGroupMetadata(conv.group_jid as string)
+    meta = await provider.fetchGroupMetadata(conv.group_jid as string)
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Falha ao buscar grupo' },
@@ -64,6 +66,21 @@ export async function POST(req: Request) {
   const memberCount =
     meta.size ?? (Array.isArray(meta.participants) ? meta.participants.length : null)
 
+  // Group photo: fetchGroupMetadata rarely returns a usable pictureUrl, so pull
+  // it via the profile-picture endpoint (works for group JIDs) and re-host —
+  // the provider CDN URL expires / blocks hotlinking, so the inbox <img> needs
+  // a stable URL of our own.
+  let picture: string | null = meta.pictureUrl ?? null
+  try {
+    const cdn = await provider.fetchProfilePictureUrl(conv.group_jid as string)
+    if (cdn) {
+      const up = await uploadAccountMediaFromUrl('chat-media', instance.account_id, cdn)
+      if (up) picture = up.publicUrl
+    }
+  } catch {
+    /* best-effort */
+  }
+
   const { error } = await supabase
     .from('conversations')
     .update({
@@ -71,7 +88,7 @@ export async function POST(req: Request) {
       group_members: meta.participants ?? null,
       group_metadata: meta,
       ...(meta.subject ? { group_name: meta.subject } : {}),
-      ...(meta.pictureUrl ? { group_picture: meta.pictureUrl } : {}),
+      ...(picture ? { group_picture: picture } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('id', conversationId)

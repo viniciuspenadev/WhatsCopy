@@ -32,17 +32,49 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 
-interface SystemEvent {
+interface GroupEventRow {
   id: string;
   created_at: string;
-  content_text: string | null;
-  payload: { action?: string; actorJid?: string | null; targetJid?: string | null } | null;
+  action: string;
+  actor_jid: string | null;
+  target_jid: string | null;
 }
 
 const DAYS = 30;
 
-function jidPhone(jid: string): string {
+function jidPhone(jid: string | null | undefined): string {
+  if (!jid) return "";
   return jid.split("@")[0].split(":")[0].replace(/\D/g, "");
+}
+
+function fmtJid(jid: string | null): string {
+  const p = jidPhone(jid);
+  return p ? `+${p}` : "Alguém";
+}
+
+/** Human label for a group event (mirrors the in-chat pill text). */
+function eventText(e: GroupEventRow): string {
+  const t = fmtJid(e.target_jid);
+  const a = fmtJid(e.actor_jid);
+  const byOther = e.actor_jid && e.actor_jid !== e.target_jid;
+  switch (e.action) {
+    case "add":
+      return byOther ? `${a} adicionou ${t}` : `${t} entrou`;
+    case "remove":
+      return byOther ? `${a} removeu ${t}` : `${t} saiu`;
+    case "promote":
+      return `${t} agora é admin`;
+    case "demote":
+      return `${t} deixou de ser admin`;
+    case "subject":
+      return "Nome do grupo alterado";
+    case "description":
+      return "Descrição do grupo alterada";
+    case "picture":
+      return "Foto do grupo alterada";
+    default:
+      return "Evento de grupo";
+  }
 }
 
 export default function GroupMonitoringDetailPage() {
@@ -51,7 +83,7 @@ export default function GroupMonitoringDetailPage() {
   const id = params.id;
 
   const [conv, setConv] = useState<Conversation | null>(null);
-  const [events, setEvents] = useState<SystemEvent[]>([]);
+  const [events, setEvents] = useState<GroupEventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [memberSearch, setMemberSearch] = useState("");
   const [removing, setRemoving] = useState(false);
@@ -68,21 +100,56 @@ export default function GroupMonitoringDetailPage() {
         .eq("id", id)
         .maybeSingle(),
       supabase
-        .from("messages")
-        .select("id, created_at, content_text, payload")
+        .from("group_events")
+        .select("id, created_at, action, actor_jid, target_jid")
         .eq("conversation_id", id)
-        .eq("content_type", "system")
         .order("created_at", { ascending: false })
         .limit(500),
     ]);
     setConv((c as Conversation) ?? null);
-    setEvents((evs as SystemEvent[]) ?? []);
+    setEvents((evs as GroupEventRow[]) ?? []);
     setLoading(false);
   }, [id]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Live updates for this group: member count (conversations) + new events
+  // (group_events) refresh the page without a manual reload.
+  useEffect(() => {
+    const supabase = createClient();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const reload = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void load(), 600);
+    };
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) supabase.realtime.setAuth(session.access_token);
+    });
+    const channel = supabase
+      .channel(`monitoring-detail-${id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "conversations", filter: `id=eq.${id}` },
+        reload,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "group_events",
+          filter: `conversation_id=eq.${id}`,
+        },
+        reload,
+      )
+      .subscribe();
+    return () => {
+      if (timer) clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
+  }, [id, load]);
 
   const members = useMemo(() => {
     const raw = conv?.group_members;
@@ -101,8 +168,8 @@ export default function GroupMonitoringDetailPage() {
     let l = 0;
     for (const e of events) {
       if (new Date(e.created_at).getTime() < since) continue;
-      if (e.payload?.action === "add") j++;
-      else if (e.payload?.action === "remove") l++;
+      if (e.action === "add") j++;
+      else if (e.action === "remove") l++;
     }
     return { joins7d: j, leaves7d: l };
   }, [events]);
@@ -119,16 +186,16 @@ export default function GroupMonitoringDetailPage() {
       const key = format(new Date(e.created_at), "yyyy-MM-dd");
       const b = buckets.get(key);
       if (!b) continue;
-      if (e.payload?.action === "add") b.entradas++;
-      else if (e.payload?.action === "remove") b.saidas++;
+      if (e.action === "add") b.entradas++;
+      else if (e.action === "remove") b.saidas++;
     }
     return [...buckets.values()];
   }, [events]);
 
   const filteredMembers = useMemo(() => {
     if (!memberSearch.trim()) return members;
-    const q = memberSearch.toLowerCase();
-    return members.filter((m) => jidPhone(m.id).includes(q.replace(/\D/g, "")));
+    const q = memberSearch.replace(/\D/g, "");
+    return members.filter((m) => jidPhone(m.phoneNumber || m.id).includes(q));
   }, [members, memberSearch]);
 
   const handleRefresh = useCallback(async () => {
@@ -186,6 +253,8 @@ export default function GroupMonitoringDetailPage() {
   const memberCount = conv.member_count ?? members.length;
   const cap = conv.member_cap || 1024;
   const pct = Math.min(100, Math.round((memberCount / cap) * 100));
+  // Keep a visible sliver for small groups (4/1024 ≈ 0% would paint nothing).
+  const fill = memberCount > 0 ? Math.max(pct, 2) : 0;
   const net = joins7d - leaves7d;
 
   return (
@@ -252,7 +321,7 @@ export default function GroupMonitoringDetailPage() {
               "h-3 rounded-full transition-all",
               pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-primary",
             )}
-            style={{ width: `${pct}%` }}
+            style={{ width: `${fill}%` }}
           />
         </div>
       </div>
@@ -378,7 +447,7 @@ export default function GroupMonitoringDetailPage() {
                         <Users className="size-3.5" />
                       </div>
                       <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                        +{jidPhone(m.id)}
+                        +{jidPhone(m.phoneNumber || m.id)}
                       </span>
                       {isAdmin && (
                         <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
@@ -412,15 +481,15 @@ export default function GroupMonitoringDetailPage() {
                     <span
                       className={cn(
                         "mt-1.5 size-1.5 shrink-0 rounded-full",
-                        e.payload?.action === "add"
+                        e.action === "add"
                           ? "bg-emerald-400"
-                          : e.payload?.action === "remove"
+                          : e.action === "remove"
                             ? "bg-red-400"
                             : "bg-muted-foreground",
                       )}
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="text-foreground">{e.content_text}</p>
+                      <p className="text-foreground">{eventText(e)}</p>
                       <p className="text-[11px] text-muted-foreground">
                         {formatDistanceToNow(new Date(e.created_at), {
                           addSuffix: true,

@@ -528,6 +528,9 @@ export async function ingestGroupEvent(
   const bucket = Math.floor(Date.now() / 60_000)
   for (const line of buildGroupEventLines(ev)) {
     const dedupId = `grpevt:${ev.action}:${line.targetJid ?? ev.groupJid}:${bucket}`
+    // 1) The in-chat pill. NOTE: public.messages has NO payload column
+    //    (payload belongs to realtime.messages) — never set it here. The
+    //    unique (conversation_id, message_id) index makes this the dedup gate.
     const { error } = await db.from('messages').insert({
       conversation_id: conv.id,
       sender_type: 'system',
@@ -535,15 +538,24 @@ export async function ingestGroupEvent(
       content_text: line.text,
       message_id: dedupId,
       status: 'delivered',
-      payload: {
-        kind: 'group_event',
-        action: ev.action,
-        actorJid: ev.author ?? null,
-        targetJid: line.targetJid ?? null,
-      },
     })
-    if (error && error.code !== '23505') {
-      console.error('[ingest] group event insert failed:', error.message)
+    if (error) {
+      // 23505 = webhook retry already processed this event → skip analytics too.
+      if (error.code !== '23505') {
+        console.error('[ingest] group event pill insert failed:', error.message)
+      }
+      continue
+    }
+    // 2) The typed analytics row (drives /monitoring charts + counters).
+    const { error: evErr } = await db.from('group_events').insert({
+      account_id: instance.account_id,
+      conversation_id: conv.id,
+      action: ev.action,
+      actor_jid: ev.author ?? null,
+      target_jid: line.targetJid ?? null,
+    })
+    if (evErr) {
+      console.error('[ingest] group_events insert failed:', evErr.message)
     }
   }
 

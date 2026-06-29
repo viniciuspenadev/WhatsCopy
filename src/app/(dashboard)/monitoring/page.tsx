@@ -45,6 +45,9 @@ function MemberBar({
   const c = count ?? 0;
   const max = cap || 1024;
   const pct = Math.min(100, Math.round((c / max) * 100));
+  // A real fill of e.g. 4/1024 ≈ 0% paints nothing ("the bar doesn't move").
+  // Keep a visible sliver whenever the group has members.
+  const fill = c > 0 ? Math.max(pct, 2) : 0;
   const color =
     pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-primary";
   return (
@@ -61,7 +64,7 @@ function MemberBar({
       <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
         <div
           className={cn("h-2 rounded-full transition-all", color)}
-          style={{ width: `${pct}%` }}
+          style={{ width: `${fill}%` }}
         />
       </div>
     </div>
@@ -99,15 +102,14 @@ export default function MonitoringPage() {
     if (ids.length > 0) {
       const since = new Date(Date.now() - SEVEN_DAYS_MS).toISOString();
       const { data: events } = await supabase
-        .from("messages")
-        .select("conversation_id, payload, created_at")
+        .from("group_events")
+        .select("conversation_id, action")
         .in("conversation_id", ids)
-        .eq("content_type", "system")
         .gte("created_at", since);
-      for (const e of (events as { conversation_id: string; payload: { action?: string } | null }[]) ?? []) {
-        const action = e.payload?.action;
-        if (action === "add") joins.set(e.conversation_id, (joins.get(e.conversation_id) ?? 0) + 1);
-        else if (action === "remove") leaves.set(e.conversation_id, (leaves.get(e.conversation_id) ?? 0) + 1);
+      for (const e of (events as { conversation_id: string; action: string }[]) ?? []) {
+        if (e.action === "add") joins.set(e.conversation_id, (joins.get(e.conversation_id) ?? 0) + 1);
+        else if (e.action === "remove")
+          leaves.set(e.conversation_id, (leaves.get(e.conversation_id) ?? 0) + 1);
       }
     }
 
@@ -125,6 +127,37 @@ export default function MonitoringPage() {
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  // Live updates: member counts (conversations) + joins/leaves (group_events)
+  // refresh the list without a manual reload. Debounced to coalesce bursts.
+  useEffect(() => {
+    const supabase = createClient();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const reload = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void load(), 600);
+    };
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) supabase.realtime.setAuth(session.access_token);
+    });
+    const channel = supabase
+      .channel("monitoring-list-rt")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "conversations" },
+        reload,
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "group_events" },
+        reload,
+      )
+      .subscribe();
+    return () => {
+      if (timer) clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
   }, [load]);
 
   const handleSyncGroups = useCallback(async () => {

@@ -27,12 +27,6 @@ interface JoinedTag {
 const CONV_SELECT =
   "*, contact:contacts(*, contact_tags(tag:tags(id, name, color)))";
 
-const STATUS_COLORS: Record<ConversationStatus, string> = {
-  open: "bg-primary",
-  pending: "bg-amber-500",
-  closed: "bg-muted-foreground",
-};
-
 // WhatsApp-style compact timestamp for the list: clock time today,
 // "Yesterday", otherwise a short date. Kept terse so it never wraps
 // next to the conversation name.
@@ -451,10 +445,15 @@ function ConversationItem({
                 {conversation.unread_count}
               </span>
             )}
-            <span
-              className={cn("h-2 w-2 rounded-full", STATUS_COLORS[conversation.status])}
-              title={conversation.status}
-            />
+            {/* Only flag conversations that need attention (pending). An
+                always-on dot for every "open" chat read as a persistent
+                "unseen" marker, which was just noise. */}
+            {conversation.status === "pending" && (
+              <span
+                className="h-2 w-2 rounded-full bg-amber-500"
+                title="Pendente"
+              />
+            )}
           </div>
         </div>
 

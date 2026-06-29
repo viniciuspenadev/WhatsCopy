@@ -102,6 +102,33 @@ export async function POST() {
     }
   }
 
+  // Group photos: fetchGroupMetadata rarely yields a usable picture, so pull
+  // each group's photo via the profile-picture endpoint and re-host. Bounded,
+  // only groups still missing a picture.
+  let groupPhotos = 0
+  const { data: groups } = await supabase
+    .from('conversations')
+    .select('id, group_jid')
+    .eq('account_id', accountId)
+    .eq('is_group', true)
+    .is('group_picture', null)
+    .not('group_jid', 'is', null)
+    .limit(30)
+  for (const g of (groups as { id: string; group_jid: string | null }[]) ?? []) {
+    if (!g.group_jid) continue
+    try {
+      const cdn = await provider.fetchProfilePictureUrl(g.group_jid)
+      if (!cdn) continue
+      const up = await uploadAccountMediaFromUrl('chat-media', accountId, cdn)
+      if (up) {
+        await supabase.from('conversations').update({ group_picture: up.publicUrl }).eq('id', g.id)
+        groupPhotos += 1
+      }
+    } catch {
+      /* best-effort per group */
+    }
+  }
+
   // How many are still eligible after this batch — lets the UI loop / show
   // "X remaining".
   const { count: remaining } = await supabase
@@ -115,6 +142,7 @@ export async function POST() {
     processed: rows.length,
     updated,
     withPhoto,
+    groupPhotos,
     remaining: remaining ?? 0,
   })
 }

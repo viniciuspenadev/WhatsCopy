@@ -180,6 +180,8 @@ export interface Conversation {
 export interface GroupParticipant {
   id: string;
   admin?: string | null;
+  /** Real phone JID when `id` is a `@lid` linked id. */
+  phoneNumber?: string | null;
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot' | 'system';
