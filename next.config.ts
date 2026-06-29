@@ -78,25 +78,23 @@ const nextConfig: NextConfig = {
    *   came back 404, the page rendered unstyled. Private/incognito
    *   did nothing because the cache is server-side.
    *
+   *   We previously tried `s-maxage=300, stale-while-revalidate=86400`
+   *   on HTML to claw back some edge caching, but SWR let a shared cache
+   *   serve the STALE document for up to 24 h after a deploy — the exact
+   *   same "HTML references 404'd chunk hashes" breakage, now lasting a
+   *   day instead of self-healing. It also marked per-user dashboard
+   *   pages `public`. Both were wrong for this app.
+   *
    * Strategy:
    *   - /_next/static/* — leave to Next. Turbopack dev chunks can go
    *     stale if we force immutable caching here; Next already emits
    *     the correct production headers for hashed assets.
    *   - /api/*          — no-store. API responses are per-user and
    *     must never be shared across requests at the edge.
-   *   - Everything else — public, brief s-maxage + generous
-   *     stale-while-revalidate. The edge serves instantly from cache
-   *     for the first 5 min, then returns cached content while
-   *     refreshing in the background for up to 24 h. A deploy's
-   *     chunk-hash drift self-heals within ~5 min with no user-
-   *     visible latency.
-   *
-   *   Note: dynamic dashboard routes (/inbox, /contacts, /pipelines,
-   *   /broadcasts, etc.) are server-rendered per request — Next.js
-   *   and Supabase auth already prevent them from being served
-   *   from a shared cache. The s-maxage here is a ceiling; Next.js
-   *   and auth middleware still set `private` / `no-store` for
-   *   per-user responses.
+   *   - Everything else (HTML documents) — no-store. They're per-user,
+   *     server-rendered, and reference deploy-specific chunk hashes;
+   *     never let a shared cache hold them. Re-fetch is cheap (the
+   *     heavy hashed assets are still immutably cached separately).
    *
    * Security headers are appended via a separate catch-all rule
    * below — Next.js merges headers from every matching rule, so
@@ -113,9 +111,16 @@ const nextConfig: NextConfig = {
         source: "/:path((?!_next/static|_next/image|api).*)",
         headers: [
           {
+            // HTML documents are NEVER shared-cached. Every dashboard route is
+            // server-rendered per user and every deploy ships new Turbopack
+            // chunk hashes — a shared cache serving stale HTML would (a) leak
+            // one user's rendered page to another and (b) reference chunk
+            // filenames that 404 after a deploy ("module factory is not
+            // available" / unstyled page). `no-store` makes the browser always
+            // refetch the document from origin. Hashed static assets keep their
+            // own immutable caching (excluded from this rule).
             key: "Cache-Control",
-            value:
-              "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
+            value: "no-store",
           },
         ],
       },
