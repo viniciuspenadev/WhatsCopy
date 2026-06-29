@@ -13,17 +13,14 @@ import {
   LogOut,
   Megaphone,
   MessageSquare,
-  QrCode,
-  Radio,
   Settings,
   Shield,
+  Sparkles,
   User,
   UserCog,
   Users,
   UsersRound,
-  Workflow,
   X,
-  Zap,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
@@ -91,13 +88,10 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
-  { href: "/connect", label: "Connect WhatsApp", icon: QrCode },
   { href: "/contacts", label: "Contacts", icon: Users },
   { href: "/pipelines", label: "Pipelines", icon: GitBranch },
-  { href: "/broadcasts", label: "Broadcasts", icon: Radio },
+  { href: "/offers", label: "Ofertas", icon: Sparkles },
   { href: "/blasts", label: "Disparos", icon: Megaphone },
-  { href: "/automations", label: "Automations", icon: Zap },
-  { href: "/flows", label: "Flows", icon: Workflow, beta: true },
 ];
 
 const bottomNavItems = [
@@ -355,7 +349,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               <DropdownMenuItem
                 render={
                   <Link
-                    href="/settings?tab=whatsapp"
+                    href="/settings?tab=connect"
                     onClick={onClose}
                     className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
                   />

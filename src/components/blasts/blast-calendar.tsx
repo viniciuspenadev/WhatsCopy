@@ -97,7 +97,7 @@ export function BlastCalendar({ blasts, onDayClick, onBlastClick }: Props) {
             <button
               key={key}
               onClick={() => onDayClick(`${key}T09:00`)}
-              className={`flex min-h-[4.5rem] flex-col rounded-md border p-1 text-left transition-colors hover:border-primary/50 ${
+              className={`flex min-h-[5.5rem] flex-col rounded-md border p-1 text-left transition-colors hover:border-primary/50 sm:min-h-[7rem] ${
                 inMonth ? 'border-border bg-background' : 'border-transparent bg-muted/30'
               }`}
             >
@@ -105,7 +105,7 @@ export function BlastCalendar({ blasts, onDayClick, onBlastClick }: Props) {
                 {format(day, 'd')}
               </span>
               <div className="mt-0.5 space-y-0.5 overflow-hidden">
-                {dayBlasts.slice(0, 2).map((b) => (
+                {dayBlasts.slice(0, 3).map((b) => (
                   <span
                     key={b.id}
                     role="button"
@@ -120,8 +120,8 @@ export function BlastCalendar({ blasts, onDayClick, onBlastClick }: Props) {
                     <span className="truncate">{b.message_text || 'Campanha'}</span>
                   </span>
                 ))}
-                {dayBlasts.length > 2 && (
-                  <span className="px-1 text-[10px] text-muted-foreground">+{dayBlasts.length - 2}</span>
+                {dayBlasts.length > 3 && (
+                  <span className="px-1 text-[10px] text-muted-foreground">+{dayBlasts.length - 3}</span>
                 )}
               </div>
             </button>

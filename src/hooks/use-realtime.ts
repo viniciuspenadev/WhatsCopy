@@ -43,39 +43,66 @@ export function useRealtime({
     if (!enabled) return;
 
     const supabase = createClient();
+    let channel: RealtimeChannel | null = null;
+    let cancelled = false;
 
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        (payload) => {
-          onMessageRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Message>["eventType"],
-            new: payload.new as Message,
-            old: payload.old as Partial<Message>,
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
-        (payload) => {
-          onConversationRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
-            new: payload.new as Conversation,
-            old: payload.old as Partial<Conversation>,
-          });
-        }
-      )
-      .subscribe((status) => {
-        setIsConnected(status === "SUBSCRIBED");
-      });
+    const subscribe = (): RealtimeChannel =>
+      supabase
+        .channel(channelName)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "messages" },
+          (payload) => {
+            onMessageRef.current?.({
+              eventType: payload.eventType as RealtimeEvent<Message>["eventType"],
+              new: payload.new as Message,
+              old: payload.old as Partial<Message>,
+            });
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "conversations" },
+          (payload) => {
+            onConversationRef.current?.({
+              eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
+              new: payload.new as Conversation,
+              old: payload.old as Partial<Conversation>,
+            });
+          }
+        )
+        .subscribe((status) => {
+          setIsConnected(status === "SUBSCRIBED");
+        });
 
-    channelRef.current = channel;
+    // RLS-protected `postgres_changes` are only delivered when the realtime
+    // socket carries the user's JWT (the policies use auth.uid()). The
+    // @supabase/ssr browser client doesn't reliably push the token to the
+    // socket BEFORE the channel joins, which silently drops every row event
+    // even though the channel shows SUBSCRIBED. Set it explicitly first.
+    (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        await supabase.realtime.setAuth(session.access_token);
+      }
+      if (cancelled) return;
+      channel = subscribe();
+      channelRef.current = channel;
+    })();
+
+    // Keep the realtime token fresh so events keep flowing after a refresh.
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.access_token) {
+        void supabase.realtime.setAuth(session.access_token);
+      }
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      authSub.subscription.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
       channelRef.current = null;
       setIsConnected(false);
     };

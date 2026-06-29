@@ -13,7 +13,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
 import { SECTION_META, type SettingsSection } from './settings-sections';
-import { SettingsChip, StatusDot } from './settings-chip';
+import { SettingsChip } from './settings-chip';
 import { ROLE_META } from './role-meta';
 
 interface OverviewCounts {
@@ -23,11 +23,6 @@ interface OverviewCounts {
   templatesPending: number | null;
   tags: number | null;
   customFields: number | null;
-}
-
-interface WhatsAppStatus {
-  configured: boolean;
-  connected: boolean;
 }
 
 export function SettingsOverview({
@@ -41,19 +36,12 @@ export function SettingsOverview({
 
   const [counts, setCounts] = useState<OverviewCounts | null>(null);
   const [countsLoading, setCountsLoading] = useState(true);
-  // WhatsApp status is tracked separately: its health check decrypts the
-  // token and pings Meta, which is far slower than the cheap count
-  // queries. Gating it independently keeps a slow/flaky Meta round-trip
-  // from blanking the rest of the landing.
-  const [whatsapp, setWhatsapp] = useState<WhatsAppStatus | null>(null);
-  const [whatsappLoading, setWhatsappLoading] = useState(true);
 
   useEffect(() => {
     if (!user || !accountId) return;
     let cancelled = false;
     const supabase = createClient();
     const userId = user.id;
-    const acctId = accountId;
 
     // Cheap counts — resolve fast, render immediately.
     (async () => {
@@ -113,25 +101,6 @@ export function SettingsOverview({
       setCountsLoading(false);
     })();
 
-    // WhatsApp connection status — slower, independent.
-    (async () => {
-      setWhatsappLoading(true);
-      const [row, health] = await Promise.allSettled([
-        supabase
-          .from('whatsapp_config')
-          .select('phone_number_id')
-          .eq('account_id', acctId)
-          .maybeSingle(),
-        fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) => r.json()),
-      ]);
-      if (cancelled) return;
-      setWhatsapp({
-        configured: row.status === 'fulfilled' && !!row.value.data?.phone_number_id,
-        connected: health.status === 'fulfilled' && !!health.value?.connected,
-      });
-      setWhatsappLoading(false);
-    })();
-
     return () => {
       cancelled = true;
     };
@@ -155,19 +124,14 @@ export function SettingsOverview({
     subtitle: ReactNode;
   }[] = [
     {
-      section: 'whatsapp',
-      loading: whatsappLoading,
-      subtitle: !whatsapp?.configured ? (
-        'Not set up yet'
-      ) : whatsapp.connected ? (
-        <>
-          <StatusDot tone="ok" /> Connected
-        </>
-      ) : (
-        <>
-          <StatusDot tone="muted" /> Needs reconnecting
-        </>
-      ),
+      section: 'connect',
+      loading: false,
+      subtitle: 'Conectar via QR Code',
+    },
+    {
+      section: 'api-offer',
+      loading: false,
+      subtitle: 'Provedor de IA + chave',
     },
     {
       section: 'members',
@@ -180,18 +144,6 @@ export function SettingsOverview({
                 ? ` · ${counts.pendingInvites} pending invite${
                     counts.pendingInvites === 1 ? '' : 's'
                   }`
-                : ''
-            }`,
-    },
-    {
-      section: 'templates',
-      loading: countsLoading,
-      subtitle:
-        counts?.templates == null
-          ? 'Manage message templates'
-          : `${counts.templates} template${counts.templates === 1 ? '' : 's'}${
-              counts.templatesPending
-                ? ` · ${counts.templatesPending} pending review`
                 : ''
             }`,
     },

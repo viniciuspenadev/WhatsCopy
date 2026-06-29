@@ -5,7 +5,9 @@ import {
   LayoutGrid,
   Palette,
   PlugZap,
+  QrCode,
   Shield,
+  Sparkles,
   Tags,
   User,
   UsersRound,
@@ -25,6 +27,8 @@ export const SETTINGS_SECTIONS = [
   'profile',
   'security',
   'appearance',
+  'connect',
+  'api-offer',
   'whatsapp',
   'templates',
   'fields',
@@ -36,6 +40,21 @@ export const SETTINGS_SECTIONS = [
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export const DEFAULT_SECTION: SettingsSection = 'overview';
+
+/**
+ * Sections temporarily hidden from the rail + overview while the product
+ * is in RedirectFlow test mode (Meta WhatsApp config + template manager
+ * aren't used right now — connection is via the Evolution QR tab). They
+ * stay in the union/panel so nothing breaks; they're just not navigable.
+ */
+export const HIDDEN_SECTIONS: ReadonlySet<SettingsSection> = new Set([
+  'whatsapp',
+  'templates',
+]);
+
+export const VISIBLE_SECTIONS = SETTINGS_SECTIONS.filter(
+  (s) => !HIDDEN_SECTIONS.has(s),
+);
 
 /** Rail grouping. `adminOnly` items are hidden for non-admins. */
 export interface SectionMeta {
@@ -50,6 +69,8 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   profile: { id: 'profile', label: 'Your profile', icon: User, group: 'account' },
   security: { id: 'security', label: 'Login & security', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },
+  connect: { id: 'connect', label: 'WhatsApp QR Code', icon: QrCode, group: 'workspace' },
+  'api-offer': { id: 'api-offer', label: 'IA / Ofertas', icon: Sparkles, group: 'workspace' },
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
   templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
@@ -76,6 +97,9 @@ function isSection(value: string | null): value is SettingsSection {
  */
 export function resolveSection(raw: string | null): SettingsSection {
   if (raw === 'tags' || raw === 'custom-fields') return 'fields';
+  // Hidden during test mode — old links land somewhere sensible.
+  if (raw === 'whatsapp') return 'connect';
+  if (raw === 'templates') return DEFAULT_SECTION;
   if (isSection(raw)) return raw;
   return DEFAULT_SECTION;
 }
