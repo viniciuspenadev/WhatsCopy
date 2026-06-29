@@ -54,14 +54,14 @@ export async function POST() {
 
   const { data: existing } = await supabase
     .from('conversations')
-    .select('id, group_jid, group_name')
+    .select('id, group_jid, group_name, member_count')
     .eq('account_id', accountId)
     .eq('instance_id', instance.id)
     .eq('is_group', true)
   const byJid = new Map(
-    ((existing as { id: string; group_jid: string; group_name: string | null }[] | null) ?? []).map(
-      (r) => [r.group_jid, r],
-    ),
+    ((existing as
+      | { id: string; group_jid: string; group_name: string | null; member_count: number | null }[]
+      | null) ?? []).map((r) => [r.group_jid, r]),
   )
 
   const toInsert: Record<string, unknown>[] = []
@@ -69,9 +69,12 @@ export async function POST() {
     if (!g.jid) continue
     const ex = byJid.get(g.jid)
     if (ex) {
-      // Keep the name fresh.
-      if (g.subject && ex.group_name !== g.subject) {
-        await supabase.from('conversations').update({ group_name: g.subject }).eq('id', ex.id)
+      // Keep the name + member count fresh (size comes from fetchAllGroups).
+      const patch: Record<string, unknown> = {}
+      if (g.subject && ex.group_name !== g.subject) patch.group_name = g.subject
+      if (g.size != null && ex.member_count !== g.size) patch.member_count = g.size
+      if (Object.keys(patch).length > 0) {
+        await supabase.from('conversations').update(patch).eq('id', ex.id)
       }
       continue
     }
@@ -83,6 +86,7 @@ export async function POST() {
       group_jid: g.jid,
       group_name: g.subject ?? null,
       group_picture: g.pictureUrl ?? null,
+      member_count: g.size ?? null,
       status: 'open',
       unread_count: 0,
     })

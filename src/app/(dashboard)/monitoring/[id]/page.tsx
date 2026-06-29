@@ -15,6 +15,7 @@ import {
   LogOut,
   Crown,
   Activity,
+  RefreshCw,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -54,6 +55,7 @@ export default function GroupMonitoringDetailPage() {
   const [loading, setLoading] = useState(true);
   const [memberSearch, setMemberSearch] = useState("");
   const [removing, setRemoving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -129,6 +131,26 @@ export default function GroupMonitoringDetailPage() {
     return members.filter((m) => jidPhone(m.id).includes(q.replace(/\D/g, "")));
   }, [members, memberSearch]);
 
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await fetch("/api/whatsapp/groups/refresh-members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data?.error || "Falha ao atualizar");
+        return;
+      }
+      await load();
+      toast.success(`${data.member_count ?? "?"} membros agora`);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [id, load]);
+
   const handleRemove = useCallback(async () => {
     setRemoving(true);
     const supabase = createClient();
@@ -200,10 +222,20 @@ export default function GroupMonitoringDetailPage() {
             </p>
           </div>
         </div>
-        <Button variant="outline" onClick={handleRemove} disabled={removing}>
-          {removing ? <Loader2 className="size-4 animate-spin" /> : null}
-          Remover do monitoramento
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
+            {refreshing ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
+            Atualizar
+          </Button>
+          <Button variant="outline" onClick={handleRemove} disabled={removing}>
+            {removing ? <Loader2 className="size-4 animate-spin" /> : null}
+            Remover
+          </Button>
+        </div>
       </div>
 
       {/* Member bar */}

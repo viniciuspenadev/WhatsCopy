@@ -315,11 +315,19 @@ function AddGroupDialog({
         .from("conversations")
         .update({ monitored: true })
         .eq("id", id);
-      setBusyId(null);
       if (error) {
+        setBusyId(null);
         toast.error("Não foi possível adicionar");
         return;
       }
+      // Pull the group's CURRENT member count + member list right away, so the
+      // X / 1024 bar isn't stuck at 0 until the first join/leave event.
+      await fetch("/api/whatsapp/groups/refresh-members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: id }),
+      }).catch(() => {});
+      setBusyId(null);
       setCandidates((prev) => prev.filter((c) => c.id !== id));
       onChanged();
       toast.success("Grupo adicionado ao monitoramento");
